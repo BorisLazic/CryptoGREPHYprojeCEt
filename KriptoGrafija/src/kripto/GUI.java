@@ -19,8 +19,7 @@ import java.io.*;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
+import java.security.cert.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -127,14 +126,26 @@ public class GUI extends Application{
                 readPassword = readPassword.replace("password:", "");
                 if((typedUsername.equals(readUserName)) && (typedPassword.equals(readPassword)))
                 {
-                    setLoggedInScene(primaryStage, modeSelected, new LoggedInUser(userName, password));
+                    while(certificateAuthority == null)
+                        Thread.sleep(250);
 
-                    return true;
+                    X509Certificate userCertificate = certificateAuthority.retrieveCertificate(userName);
+
+                    if(CertificateAuthority.isValidCertificate(userCertificate)) {
+                        setLoggedInScene(primaryStage, modeSelected, new LoggedInUser(userName, password));
+                        return true;
+                    }
+                    certificateAuthority.writeCRL(certificateAuthority.generateCRList(certificateAuthority.caCert,certificateAuthority.caKeyPair.getPrivate(),userCertificate));
+                    Alert alert = new Alert(Alert.AlertType.WARNING, "Certificate no longer valid!" + " !", ButtonType.OK);
+                    alert.showAndWait();
+                    return false;
                 }
             }
 
         } catch (IOException ex) {
             Logger.getLogger(GUI.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (Exception e) {
+            e.printStackTrace();
         }
         return false;
     }

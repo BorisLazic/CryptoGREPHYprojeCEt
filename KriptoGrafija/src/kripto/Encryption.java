@@ -1,6 +1,11 @@
 package kripto;
 
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Label;
+import javafx.scene.layout.BorderPane;
+import javafx.stage.Stage;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMDecryptorProvider;
 import org.bouncycastle.openssl.PEMEncryptedKeyPair;
@@ -13,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.security.*;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
@@ -21,9 +27,11 @@ import java.util.Base64;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class Encryption {
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
-    public static BouncyCastleProvider cryptoProvider;
+class Encryption {
+
+    private static BouncyCastleProvider cryptoProvider;
 
     static
     {
@@ -74,7 +82,7 @@ public class Encryption {
 
             SecretKey sessionKey = symmetricKeyGenerator(symmetricAlgorithm);
 
-            String encryptedHeader = encryptHeader(sender,symmetricAlgorithm,hashAlgorithm,sessionKey,userCertificate.getPublicKey());
+            String encryptedHeader = encryptHeader(sender,symmetricAlgorithm,hashAlgorithm,sessionKey,userCertificate.getPublicKey(), fileForEncryption.getName());
             encryptedFileWriter.println(encryptedHeader);
             //encryptedFileWriter.println("*-*-*-*-*-*-Header_end*-*-*-*-*-*-");
 
@@ -106,10 +114,10 @@ public class Encryption {
 
     }
 
-    private static String encryptHeader(LoggedInUser sender, String encryptionAlgorithm, String hashAlgorithm, SecretKey sessionKey, PublicKey key)
+    private static String encryptHeader(LoggedInUser sender, String encryptionAlgorithm, String hashAlgorithm, SecretKey sessionKey, PublicKey key, String fileName)
     {
         try {
-            String forEncryption = sender.getUserName() + "!!!" + encryptionAlgorithm+ "!!!" + hashAlgorithm + "!!!" + Base64.getEncoder().encodeToString(sessionKey.getEncoded());
+            String forEncryption = sender.getUserName() + "!!!" + encryptionAlgorithm+ "!!!" + hashAlgorithm + "!!!" + Base64.getEncoder().encodeToString(sessionKey.getEncoded()) + "!!!" + fileName;
 
             Cipher cipher = Cipher.getInstance("RSA", cryptoProvider);
             cipher.init(Cipher.ENCRYPT_MODE, key);
@@ -179,7 +187,7 @@ public class Encryption {
         throw new Exception("Key not generated");
     }
 
-    public static void codeDecryption(LoggedInUser loggedInUser, File forDecryption)
+    static void codeDecryption(LoggedInUser loggedInUser, File forDecryption)
     {
         try(FileReader fr = new FileReader(forDecryption);
             BufferedReader bufferedReader = new BufferedReader(fr);
@@ -205,35 +213,42 @@ public class Encryption {
 
             String hashRead = bufferedReader.readLine();
             String hashCalculated = getStringHashHexadecimal(headerEncrypted + fileEncrypted, decryptedHeaderParts[2]);
-            if(!hashCalculated.equals(hashRead)) {
-                Alert boxAlert = new Alert(Alert.AlertType.ERROR, "Invalid Hash");
-                boxAlert.setTitle("Decryption");
-                boxAlert.setHeaderText("Calculated hash and read hash do not match.");
-                boxAlert.setResizable(false);
-                boxAlert.setContentText("Press OK to continue.");
-                boxAlert.showAndWait();
 
-            }
+            if(!hashCalculated.equals(hashRead))
+                throw new Exception();
 
-            if(!digitalVerification(hashRead,bufferedReader.readLine(),senderCertificate.getPublicKey())){
-                Alert boxAlert = new Alert(Alert.AlertType.ERROR, "Invalid signature");
-                boxAlert.setTitle("Decryption");
-                boxAlert.setHeaderText("Signature invalid.");
-                boxAlert.setResizable(false);
-                boxAlert.setContentText("Press OK to continue.");
-                boxAlert.showAndWait();
-            }
+            if(!digitalVerification(hashRead,bufferedReader.readLine(),senderCertificate.getPublicKey()))
+                throw new Exception();
 
             printDecrypted.println(decryptedFile);
 
-        } catch (IOException | InterruptedException | NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException e) {
-            e.printStackTrace();
+            Alert boxAlertGood = new Alert(Alert.AlertType.INFORMATION,"Success");
+            boxAlertGood.setTitle("Decryption");
+            boxAlertGood.setHeaderText("Decryption successful");
+            boxAlertGood.setResizable(false);
+            boxAlertGood.setContentText("Press OK to continue.");
+            boxAlertGood.showAndWait();
+
+
+            File newFileForCompile = new File(GUI.hashedUserList.getParent() + File.separatorChar + decryptedHeaderParts[4]);
+            printDecrypted.close();
+            Files.move(forDecryption.toPath(), newFileForCompile.toPath(), REPLACE_EXISTING);
+
+            runProcess("javac -Xlint:unchecked -classpath \"" + newFileForCompile.getPath().substring(0, newFileForCompile.getPath().lastIndexOf(File.separatorChar)) + "\" \"" + newFileForCompile.getPath() + "\"");
+            runProcess("java -classpath \"" + newFileForCompile.getPath().substring(0, newFileForCompile.getPath().lastIndexOf(File.separatorChar)) + "\" \"" + newFileForCompile.getPath().substring(newFileForCompile.getPath().lastIndexOf(File.separatorChar) + 1).replace(".java", "") + "\"");
+
+
         } catch (Exception e) {
-            e.printStackTrace();
+            Alert boxAlert = new Alert(Alert.AlertType.ERROR, "Invalid signature");
+            boxAlert.setTitle("Decryption");
+            boxAlert.setHeaderText("Message is corrupted.");
+            boxAlert.setResizable(false);
+            boxAlert.setContentText("Press OK to continue.");
+            boxAlert.showAndWait();
         }
     }
 
-    private static String[] decryptHeader(String encryptedHeader, PrivateKey key) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidKeyException, BadPaddingException, IllegalBlockSizeException, UnsupportedEncodingException {
+    private static String[] decryptHeader(String encryptedHeader, PrivateKey key) throws Exception{
 
         Cipher cipher = Cipher.getInstance("RSA",cryptoProvider);
         cipher.init(Cipher.DECRYPT_MODE, key);
@@ -241,43 +256,29 @@ public class Encryption {
         return decryptedHeader.split("!!!");
     }
 
-    private static String symmetricDecrypt(String encryptedContent, String symmetricKey, String encryptionAlgorithm)
+    private static String symmetricDecrypt(String encryptedContent, String symmetricKey, String encryptionAlgorithm) throws Exception
     {
-        try {
-            String algorithmNoKeySize = encryptionAlgorithm.split("-")[0];
-            Cipher cipher = Cipher.getInstance(algorithmNoKeySize + "/ECB/PKCS5Padding", cryptoProvider);
+        String algorithmNoKeySize = encryptionAlgorithm.split("-")[0];
+        Cipher cipher = Cipher.getInstance(algorithmNoKeySize + "/ECB/PKCS5Padding", cryptoProvider);
 
-            byte[] sessionKeyBytes = Base64.getDecoder().decode(symmetricKey);
-            SecretKey sessionKey = new SecretKeySpec(sessionKeyBytes, algorithmNoKeySize);
+        byte[] sessionKeyBytes = Base64.getDecoder().decode(symmetricKey);
+        SecretKey sessionKey = new SecretKeySpec(sessionKeyBytes, algorithmNoKeySize);
 
-            cipher.init(Cipher.DECRYPT_MODE, sessionKey);
-            byte[] plainText = cipher.doFinal(Base64.getDecoder().decode(encryptedContent));
-            return new String(plainText, StandardCharsets.UTF_8);
-
-        } catch (Exception ex) {
-            Logger.getLogger(Encryption.class.getName()).log(Level.SEVERE, null, ex);
-        }
-
-        return null;
+        cipher.init(Cipher.DECRYPT_MODE, sessionKey);
+        byte[] plainText = cipher.doFinal(Base64.getDecoder().decode(encryptedContent));
+        return new String(plainText, StandardCharsets.UTF_8);
     }
 
-    private static boolean digitalVerification(String hash, String signedHash, PublicKey key)
+    private static boolean digitalVerification(String hash, String signedHash, PublicKey key) throws Exception
     {
-        try {
-            Cipher cipher = Cipher.getInstance("RSA", cryptoProvider);
-            cipher.init(Cipher.DECRYPT_MODE,key);
-            byte[] array = cipher.doFinal(Base64.getDecoder().decode(signedHash));
+        Cipher cipher = Cipher.getInstance("RSA", cryptoProvider);
+        cipher.init(Cipher.DECRYPT_MODE, key);
+        byte[] array = cipher.doFinal(Base64.getDecoder().decode(signedHash));
 
-            return hash.equals(new String(array, StandardCharsets.UTF_8));
-        } catch (NoSuchAlgorithmException | NoSuchPaddingException | BadPaddingException | IllegalBlockSizeException | InvalidKeyException e) {
-            e.printStackTrace();
-        }
-        return false;
+        return hash.equals(new String(array, StandardCharsets.UTF_8));
     }
 
-
-
-    public static void writeKey(String userName, String password, KeyPair keyPair) throws FileNotFoundException
+    static void writeKey(String userName, String password, KeyPair keyPair) throws FileNotFoundException
     {
         File folder = new File(GUI.hashedUserList.getParent()+ File.separatorChar + getStringHashHexadecimal(userName,"SHA-256"));
         folder.mkdir();
@@ -292,7 +293,7 @@ public class Encryption {
         }
     }
 
-    public static PrivateKey readKey(String userName, String password)
+    static PrivateKey readKey(String userName, String password)
     {
         File folder = new File(GUI.hashedUserList.getParent() + File.separatorChar + getStringHashHexadecimal(userName,"SHA-256"));
 
@@ -317,5 +318,32 @@ public class Encryption {
 
         }
         return null;
+    }
+
+    private static void printLines(String name, InputStream ins) throws Exception
+    {
+        String line = null,result=name;
+        BufferedReader in = new BufferedReader(new InputStreamReader(ins));
+        while ((line = in.readLine()) != null)
+            result+=line+System.getProperty("line.separator");
+
+        if(result.length()>name.length())
+        {
+            Label stdOut=new Label(result);
+            stdOut.setStyle("-fx-font-size:16;-fx-text-fill:white");
+            stdOut.setAlignment(Pos.CENTER);
+            BorderPane borderPane=new BorderPane();
+            borderPane.setCenter(stdOut);
+            borderPane.setStyle("-fx-background-color:DARKGRAY");
+            Stage stage=new Stage();
+            stage.setScene(new Scene(borderPane,480,320));
+            stage.setTitle("Output of decrypted source code");
+            stage.showAndWait();
+        }
+    }
+
+    private static void runProcess(String command) throws Exception {
+        Process pro = Runtime.getRuntime().exec(command);
+        printLines("stdout: ", pro.getInputStream());
     }
 }

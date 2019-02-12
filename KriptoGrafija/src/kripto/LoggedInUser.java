@@ -1,6 +1,6 @@
 package kripto;
 
-public class LoggedInUser {
+class LoggedInUser {
 
     private String userName, password;
 
@@ -11,11 +11,11 @@ public class LoggedInUser {
     }
 
 
-    public String getUserName() {
+    String getUserName() {
         return userName;
     }
 
-    public String getPassword() {
+    String getPassword() {
         return password;
     }
 }

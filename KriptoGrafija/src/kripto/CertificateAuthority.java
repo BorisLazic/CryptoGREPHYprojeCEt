@@ -1,10 +1,6 @@
 package kripto;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -14,14 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Security;
-import java.security.cert.CRLReason;
-import java.security.cert.CertificateException;
-import java.security.cert.CertificateExpiredException;
-import java.security.cert.CertificateFactory;
-import java.security.cert.CertificateNotYetValidException;
-import java.security.cert.X509CRL;
-import java.security.cert.X509CRLEntry;
-import java.security.cert.X509Certificate;
+import java.security.cert.*;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Iterator;
@@ -51,8 +40,8 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  */
 public class CertificateAuthority {
 
-    private  X509Certificate        certificationAuthority;
-    private  KeyPair                certificateAuthorityKeyPair;
+    public  X509Certificate caCert;
+    public  KeyPair caKeyPair;
     private  BouncyCastleProvider   providerBC;
     private  String                 CANameInFormat = "C=CA,O=CA";
 
@@ -68,10 +57,10 @@ public class CertificateAuthority {
                 KeyPairGenerator keyGenCA = KeyPairGenerator.getInstance("RSA");
                 keyGenCA.initialize(3072);
 
-                certificateAuthorityKeyPair = keyGenCA.generateKeyPair();
+                caKeyPair = keyGenCA.generateKeyPair();
 
-                certificationAuthority = selfSign(certificateAuthorityKeyPair, CANameInFormat);
-                Encryption.writeKey("CA", "password", certificateAuthorityKeyPair);
+                caCert = selfSign(caKeyPair, CANameInFormat);
+                Encryption.writeKey("CA", "password", caKeyPair);
             }
             catch (IOException | CertificateException | OperatorCreationException e) { e.printStackTrace();} catch (NoSuchAlgorithmException ex) {
                 Logger.getLogger(CertificateAuthority.class.getName()).log(Level.SEVERE, null, ex);
@@ -79,8 +68,8 @@ public class CertificateAuthority {
         } else
         {
             try {
-                certificationAuthority = retrieveCertificate("CA");
-                certificateAuthorityKeyPair = new KeyPair(certificationAuthority.getPublicKey(), Encryption.readKey("CA", "password"));
+                caCert = retrieveCertificate("CA");
+                caKeyPair = new KeyPair(caCert.getPublicKey(), Encryption.readKey("CA", "password"));
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -101,7 +90,7 @@ public class CertificateAuthority {
 
         X500Name authorityName = new X500Name(name);
 
-        ContentSigner signer = new JcaContentSignerBuilder("SHA512WithRSA").build(certificateAuthorityKeyPair.getPrivate());
+        ContentSigner signer = new JcaContentSignerBuilder("SHA512WithRSA").build(caKeyPair.getPrivate());
 
         JcaX509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(authorityName,
                 new BigInteger(Long.toString(currentTimeMili)),
@@ -131,7 +120,7 @@ public class CertificateAuthority {
         Date certificateExpirationDate = expiryCalculator.getTime();
 
 
-        ContentSigner signer = new JcaContentSignerBuilder("SHA512WithRSA").build(certificateAuthorityKeyPair.getPrivate());
+        ContentSigner signer = new JcaContentSignerBuilder("SHA512WithRSA").build(caKeyPair.getPrivate());
 
         JcaX509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(new X500Name(CANameInFormat),
                 new BigInteger(Long.toString(currentTimeMili)),
@@ -161,7 +150,7 @@ public class CertificateAuthority {
         return null;
     }
 
-    public X509CRL generateCRLlist(X509Certificate ca, PrivateKey caPrivateKey, X509Certificate... revoked) throws Exception
+    public X509CRL generateCRList(X509Certificate ca, PrivateKey caPrivateKey, X509Certificate... revoked) throws Exception
     {
         X509v2CRLBuilder builderCRL = new X509v2CRLBuilder(new X500Name(ca.getSubjectDN().getName()), new Date());
 
@@ -206,20 +195,41 @@ public class CertificateAuthority {
 
     public void writeCRL(X509CRL crlList)
     {
-        try (PrintWriter printCRL = new PrintWriter(GUI.hashedUserList.getPath() + File.separatorChar + "Revoked.crl");
+        try (PrintWriter printCRL = new PrintWriter(GUI.hashedUserList.getParent() + File.separatorChar + "Revoked.crl");
              JcaPEMWriter pemWriter = new JcaPEMWriter(printCRL)) {
-            pemWriter.writeObject(crlList);
+             pemWriter.writeObject(crlList);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
-    public static void IsValidCertificate(X509Certificate certificate)
+    public static boolean isValidCertificate(X509Certificate certificate)
     {
-        try {
+        File crlLocation = new File(GUI.hashedUserList.getParent()+File.separatorChar+"Revoked.crl");
+        try(FileInputStream input = new FileInputStream(crlLocation)) {
             certificate.checkValidity();
-        } catch (CertificateExpiredException | CertificateNotYetValidException ex) {
-            Alert alert = new Alert(Alert.AlertType.WARNING, "Certificate of message recipient is no longer valid" + " !", ButtonType.OK);
+
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            X509CRL crl = (X509CRL) cf.generateCRL(input);
+
+            Set revokedCertificates = crl.getRevokedCertificates();
+
+            if(revokedCertificates != null && !revokedCertificates.isEmpty())
+            {
+                Iterator traveler = revokedCertificates.iterator();
+
+                while(traveler.hasNext())
+                {
+                    X509CRLEntry single = (X509CRLEntry) traveler.next();
+                    BigInteger crlSerial = single.getSerialNumber();
+                    if(certificate.getSerialNumber().equals(crlSerial))
+                        return false;
+                }
+            }
+        } catch (Exception ex) {
+            Alert alert = new Alert(Alert.AlertType.WARNING, "Certificate no longer valid!" + " !", ButtonType.OK);
             alert.showAndWait();
+            return false;
         }
+        return true;
     }
 }
